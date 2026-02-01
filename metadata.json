@@ -1,0 +1,8 @@
+{
+  "name": "OmniSearch AI",
+  "description": "A high-performance AI assistant powered by Google's latest models, featuring real-time Google Search grounding, multimodal intelligence, and voice conversation.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
