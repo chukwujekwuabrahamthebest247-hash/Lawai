@@ -1,8 +1,8 @@
 import { HfInference } from "@huggingface/inference";
 import { GroundingSource, SourceScope, VoiceGender, LegalMethod } from "../types";
 
-// RECOMMENDED: Use these models for the FREE serverless API
-const TEXT_MODEL = 'meta-llama/Llama-3.1-8B-Instruct'; 
+// UPDATED MODEL NAME
+const TEXT_MODEL = 'Qwen/Qwen3-Coder-Next'; 
 const TTS_MODEL = 'facebook/mms-tts-eng'; 
 
 export const generateAIResponse = async (
@@ -11,7 +11,8 @@ export const generateAIResponse = async (
   legalMethod: LegalMethod = 'NONE',
   scope: SourceScope = 'NIGERIA'
 ): Promise<{ text: string; sources: GroundingSource[] }> => {
-  // Uses the free Serverless Inference API
+  
+  // Initialize with your HF Token (Must have "Inference Providers" permission)
   const hf = new HfInference(process.env.VITE_HUGGINGFACE_API_KEY || process.env.HUGGINGFACE_API_KEY);
   
   const scopeSuffix = scope === 'NIGERIA' 
@@ -43,13 +44,15 @@ export const generateAIResponse = async (
       `Source: ${result.title}\nLink: ${result.link}\nSnippet: ${result.snippet}`
     ).join("\n\n") || "No search results found.";
 
+    // --- CHANGED SECTION ---
     const response = await hf.chatCompletion({
       model: TEXT_MODEL,
+      provider: "novita", // The computer-readable ID for Novita
       messages: [
         { role: "system", content: systemInstruction },
         { role: "user", content: `CONTEXT:\n${searchContext}\n\nUSER QUERY: ${prompt}` }
       ],
-      max_tokens: 1000,
+      max_tokens: 1500,
       temperature: 0.1,
     });
 
