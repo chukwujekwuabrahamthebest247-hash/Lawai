@@ -1,9 +1,8 @@
-
 import { HfInference } from "@huggingface/inference";
 import { GroundingSource, SourceScope, VoiceGender, LegalMethod } from "../types";
 
-const TEXT_MODEL = 'gemini-3-flash-preview';
-const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
+const TEXT_MODEL = 'mistralai/Mistral-7B-Instruct-v0.3'; // Optimized for HF Inference
+const TTS_MODEL = 'facebook/mms-tts-eng'; // Reliable open-source TTS
 
 export const generateAIResponse = async (
   prompt: string,
@@ -17,17 +16,6 @@ export const generateAIResponse = async (
     ? "(Jurisdiction: Nigeria. Ground response in 1999 Constitution & LFN. Use 'googleSearch' tool.)" 
     : "(Jurisdiction: Global. Ground in international laws. Use 'googleSearch' tool.)";
     
-  const parts: any[] = [{ text: `QUERY: ${prompt}\n\n${scopeSuffix}` }];
-  
-  base64Images.forEach((img) => {
-    parts.push({
-      inlineData: {
-        mimeType: "image/jpeg",
-        data: img.split(',')[1] || img
-      }
-    });
-  });
-
   const legalFramework = legalMethod !== 'NONE' 
     ? `STRUCTURE: Strictly apply the ${legalMethod} reasoning framework.`
     : `MANDATORY: Provide a 'LEGAL BACKBONE' section with specific statutory citations.`;
@@ -38,7 +26,7 @@ export const generateAIResponse = async (
     3. Maintain a senior, authoritative tone.
     ${legalFramework}`;
 
-    try {
+  try {
     // 1. CALL GOOGLE SEARCH (Using Serper)
     const searchResponse = await fetch("https://google.serper.dev", {
       method: "POST",
@@ -50,10 +38,9 @@ export const generateAIResponse = async (
     });
     const searchData = await searchResponse.json();
     
-    // Format the search results so the AI can see them
     const searchContext = searchData.organic?.map((result: any) => 
       `Source: ${result.title}\nLink: ${result.link}\nSnippet: ${result.snippet}`
-    ).join("\n\n");
+    ).join("\n\n") || "No search results found.";
 
     // 2. SEND EVERYTHING TO HUGGING FACE
     const response = await hf.chatCompletion({
@@ -66,25 +53,24 @@ export const generateAIResponse = async (
       temperature: 0.1,
     });
 
-    // 3. MAP SOURCES (To keep your original sources feature)
+    // 3. MAP SOURCES
     const sources = searchData.organic?.map((res: any) => ({
       title: res.title,
       uri: res.link
     })) || [];
 
-    return { text: response.choices.message.content || "No findings.", sources };
+    return { text: response.choices[0].message.content || "No findings.", sources };
     
   } catch (error) {
     console.error("Search/AI Error:", error);
     throw error;
   }
-
+}; // FIX: Properly closing generateAIResponse
 
 export const generateSpeech = async (text: string, voiceGender: VoiceGender): Promise<Uint8Array | null> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const voiceName = voiceGender === 'FEMALE' ? 'Kore' : 'Fenrir';
+  const hf = new HfInference(process.env.HUGGINGFACE_API_KEY);
+  
   try {
-    // Aggressive cleaning for TTS stability
     const cleanText = text
       .replace(/[#*_`~>]/g, '')
       .replace(/\[.*?\]\(.*?\)/g, '')
@@ -92,33 +78,25 @@ export const generateSpeech = async (text: string, voiceGender: VoiceGender): Pr
       .trim()
       .slice(0, 4000);
     
-    const response = await ai.models.generateContent({
+    // Using Hugging Face's textToSpeech instead of Google
+    const response = await hf.textToSpeech({
       model: TTS_MODEL,
-      contents: [{ parts: [{ text: cleanText }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: { 
-          voiceConfig: { 
-            prebuiltVoiceConfig: { voiceName } 
-          } 
-        },
-      },
+      inputs: cleanText,
     });
 
-    const audioPart = response.candidates?.[0]?.content?.parts.find(p => p.inlineData?.data);
-    return audioPart?.inlineData?.data ? decode(audioPart.inlineData.data) : null;
+    const arrayBuffer = await response.arrayBuffer();
+    return new Uint8Array(arrayBuffer);
+
   } catch (error) { 
-    console.error("Vocal synthesis failure:", error);
+    console.error("Hugging Face TTS failure:", error);
     return null; 
   }
 };
 
 export function decode(base64: string): Uint8Array {
-  // Clean whitespace just in case
   const binaryString = atob(base64.replace(/\s/g, ''));
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
     bytes[i] = binaryString.charCodeAt(i);
   }
   return bytes;
@@ -130,7 +108,6 @@ export async function decodeAudioData(
   sampleRate: number = 24000,
   numChannels: number = 1
 ): Promise<AudioBuffer> {
-  // Use DataView for maximum byte-alignment safety with 16-bit PCM
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const frameCount = data.byteLength / 2 / numChannels;
   const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
@@ -139,9 +116,11 @@ export async function decodeAudioData(
     const channelData = buffer.getChannelData(channel);
     for (let i = 0; i < frameCount; i++) {
       const byteOffset = (i * numChannels + channel) * 2;
-      // Read 16-bit signed integer (little-endian) and normalize to [-1, 1]
-      const sample = view.getInt16(byteOffset, true);
-      channelData[i] = sample / 32768.0;
+      // Safety check to ensure we don't read out of bounds
+      if (byteOffset + 1 < data.byteLength) {
+        const sample = view.getInt16(byteOffset, true);
+        channelData[i] = sample / 32768.0;
+      }
     }
   }
   return buffer;
