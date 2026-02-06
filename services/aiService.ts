@@ -38,33 +38,47 @@ export const generateAIResponse = async (
     3. Maintain a senior, authoritative tone.
     ${legalFramework}`;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: TEXT_MODEL,
-      contents: { parts },
-      config: {
-        systemInstruction,
-        tools: [{ googleSearch: {} }],
-        temperature: 0.1,
+    try {
+    // 1. CALL GOOGLE SEARCH (Using Serper)
+    const searchResponse = await fetch("https://google.serper.dev", {
+      method: "POST",
+      headers: { 
+        "X-API-KEY": process.env.SERPER_API_KEY as string,
+        "Content-Type": "application/json" 
       },
+      body: JSON.stringify({ q: prompt })
+    });
+    const searchData = await searchResponse.json();
+    
+    // Format the search results so the AI can see them
+    const searchContext = searchData.organic?.map((result: any) => 
+      `Source: ${result.title}\nLink: ${result.link}\nSnippet: ${result.snippet}`
+    ).join("\n\n");
+
+    // 2. SEND EVERYTHING TO HUGGING FACE
+    const response = await hf.chatCompletion({
+      model: TEXT_MODEL,
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user", content: `CONTEXT FROM GOOGLE SEARCH:\n${searchContext}\n\nUSER QUERY: ${prompt}` }
+      ],
+      max_tokens: 1000,
+      temperature: 0.1,
     });
 
-    const sources: GroundingSource[] = [];
-    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-    if (groundingChunks) {
-      groundingChunks.forEach((chunk: any) => {
-        if (chunk.web) {
-          sources.push({ title: chunk.web.title || "Reference", uri: chunk.web.uri });
-        }
-      });
-    }
+    // 3. MAP SOURCES (To keep your original sources feature)
+    const sources = searchData.organic?.map((res: any) => ({
+      title: res.title,
+      uri: res.link
+    })) || [];
 
-    return { text: response.text || "Investigation concluded with no specific findings.", sources };
+    return { text: response.choices.message.content || "No findings.", sources };
+    
   } catch (error) {
-    console.error("Synthesis error:", error);
+    console.error("Search/AI Error:", error);
     throw error;
   }
-};
+
 
 export const generateSpeech = async (text: string, voiceGender: VoiceGender): Promise<Uint8Array | null> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
