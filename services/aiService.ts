@@ -11,7 +11,7 @@ export const generateAIResponse = async (
   legalMethod: LegalMethod = 'NONE',
   scope: SourceScope = 'NIGERIA'
 ): Promise<{ text: string; sources: GroundingSource[] }> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const hf = new HfInference(process.env.HUGGINGFACE_API_KEY);
   
   const scopeSuffix = scope === 'NIGERIA' 
     ? "(Jurisdiction: Nigeria. Ground response in 1999 Constitution & LFN. Use 'googleSearch' tool.)" 
