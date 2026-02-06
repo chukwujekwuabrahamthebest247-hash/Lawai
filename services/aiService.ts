@@ -1,7 +1,8 @@
 import { HfInference } from "@huggingface/inference";
 import { GroundingSource, SourceScope, VoiceGender, LegalMethod } from "../types";
 
-const TEXT_MODEL = 'HuggingFaceH4/zephyr-7b-beta'; 
+// RECOMMENDED: Use these models for the FREE serverless API
+const TEXT_MODEL = 'meta-llama/Llama-3.1-8B-Instruct'; 
 const TTS_MODEL = 'facebook/mms-tts-eng'; 
 
 export const generateAIResponse = async (
@@ -10,6 +11,7 @@ export const generateAIResponse = async (
   legalMethod: LegalMethod = 'NONE',
   scope: SourceScope = 'NIGERIA'
 ): Promise<{ text: string; sources: GroundingSource[] }> => {
+  // Uses the free Serverless Inference API
   const hf = new HfInference(process.env.VITE_HUGGINGFACE_API_KEY || process.env.HUGGINGFACE_API_KEY);
   
   const scopeSuffix = scope === 'NIGERIA' 
@@ -69,7 +71,6 @@ export const generateAIResponse = async (
   }
 };
 
-// Ensure "export" is present here!
 export const generateSpeech = async (text: string, voiceGender: VoiceGender): Promise<Uint8Array | null> => {
   const hf = new HfInference(process.env.VITE_HUGGINGFACE_API_KEY || process.env.HUGGINGFACE_API_KEY);
   
@@ -104,7 +105,6 @@ export function decode(base64: string): Uint8Array {
   return bytes;
 }
 
-// Ensure "export" is present here!
 export async function decodeAudioData(
   data: Uint8Array,
   ctx: AudioContext,
