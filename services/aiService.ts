@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, Modality } from "@google/genai";
+import { HfInference } from "@huggingface/inference";
 import { GroundingSource, SourceScope, VoiceGender, LegalMethod } from "../types";
 
 const TEXT_MODEL = 'gemini-3-flash-preview';
