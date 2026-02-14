@@ -1,132 +1,113 @@
-import { HfInference } from "@huggingface/inference";
 import { GroundingSource, SourceScope, VoiceGender, LegalMethod } from "../types";
 
-// UPDATED MODEL NAME
-const TEXT_MODEL = 'Qwen/Qwen3-Coder-Next'; 
-const TTS_MODEL = 'facebook/mms-tts-eng'; 
+// --- DYNAMIC KEY LOADER ---
+const getEnv = (key: string) => {
+  return (import.meta.env?.[`VITE_${key}`]) || (process.env?.[`VITE_${key}`]) || (process.env?.[key]) || "";
+};
 
+const OPENROUTER_API_URL = "https://openrouter.ai";
+const OPENROUTER_MODEL = "openrouter/free"; 
+
+/**
+ * 1. AI RESPONSE GENERATOR (OpenRouter + Tavily + Serper)
+ */
 export const generateAIResponse = async (
   prompt: string,
   base64Images: string[] = [],
   legalMethod: LegalMethod = 'NONE',
   scope: SourceScope = 'NIGERIA'
 ): Promise<{ text: string; sources: GroundingSource[] }> => {
-  
-  // Initialize with your HF Token (Must have "Inference Providers" permission)
-  const hf = new HfInference(process.env.VITE_HUGGINGFACE_API_KEY || process.env.HUGGINGFACE_API_KEY);
-  
-  const scopeSuffix = scope === 'NIGERIA' 
-    ? "(Jurisdiction: Nigeria. Ground response in 1999 Constitution & LFN.)" 
-    : "(Jurisdiction: Global. Ground in international laws.)";
-    
-  const legalFramework = legalMethod !== 'NONE' 
-    ? `STRUCTURE: Strictly apply the ${legalMethod} reasoning framework.`
-    : `MANDATORY: Provide a 'LEGAL BACKBONE' section with specific statutory citations.`;
 
-  const systemInstruction = `You are OmniSearch Legal Pro. 
-    1. Provide section citations for all legal claims.
-    2. Maintain a senior, authoritative tone.
-    ${legalFramework} ${scopeSuffix}`;
+  const SERPER_KEY = getEnv("SERPER_API_KEY");
+  const TAVILY_KEY = getEnv("TAVILY_API_KEY");
+  const OPENROUTER_KEY = getEnv("OPENROUTER_API_KEY");
+
+  // A. Multi-Engine Research
+  const [serper, tavily] = await Promise.all([
+    fetchSerper(prompt, SERPER_KEY),
+    fetchTavily(prompt, TAVILY_KEY)
+  ]);
+
+  const uniqueSources = Array.from(new Map([...serper, ...tavily].map(s => [s.uri, s])).values());
+  const searchContext = uniqueSources.map((s, i) => `[${i+1}] ${s.title}\nURL: ${s.uri}\nData: ${s.snippet}`).join("\n\n");
+
+  // B. Legal Instruction
+  const scopeSuffix = scope === 'NIGERIA' ? "(Jurisdiction: Nigeria. Use 1999 Constitution & LFN.)" : "(Global Law)";
+  const systemInstruction = `You are OmniSearch Legal Pro. Answer based on RESEARCH CONTEXT. Provide citations. ${scopeSuffix}`;
 
   try {
-    const searchResponse = await fetch("https://google.serper.dev", {
+    const response = await fetch(OPENROUTER_API_URL, {
       method: "POST",
-      headers: { 
-        "X-API-KEY": (process.env.VITE_SERPER_API_KEY || process.env.SERPER_API_KEY) as string,
-        "Content-Type": "application/json" 
+      headers: {
+        "Authorization": `Bearer ${OPENROUTER_KEY}`,
+        "Content-Type": "application/json"
       },
-      body: JSON.stringify({ q: prompt })
-    });
-    
-    const searchData = await searchResponse.json();
-    
-    const searchContext = searchData.organic?.map((result: any) => 
-      `Source: ${result.title}\nLink: ${result.link}\nSnippet: ${result.snippet}`
-    ).join("\n\n") || "No search results found.";
-
-    // --- CHANGED SECTION ---
-    const response = await hf.chatCompletion({
-      model: TEXT_MODEL,
-      provider: "novita", // The computer-readable ID for Novita
-      messages: [
-        { role: "system", content: systemInstruction },
-        { role: "user", content: `CONTEXT:\n${searchContext}\n\nUSER QUERY: ${prompt}` }
-      ],
-      max_tokens: 1500,
-      temperature: 0.1,
+      body: JSON.stringify({
+        model: OPENROUTER_MODEL,
+        messages: [
+          { role: "system", content: systemInstruction },
+          { role: "user", content: `RESEARCH CONTEXT:\n${searchContext}\n\nQUERY: ${prompt}` }
+        ],
+        temperature: 0.1,
+      })
     });
 
-    const sources = searchData.organic?.map((res: any) => ({
-      title: res.title,
-      uri: res.link
-    })) || [];
-
-    const aiText = response.choices[0]?.message?.content || "I couldn't generate a response.";
-
-    return { text: aiText, sources };
-    
-  } catch (error: any) {
-    console.error("AI Service Error:", error);
+    const data = await response.json();
     return { 
-      text: `Error: ${error.message || "The AI is currently unavailable."}`, 
-      sources: [] 
+      text: data.choices[0]?.message?.content || "No response generated.", 
+      sources: uniqueSources.map(s => ({ title: s.title, uri: s.uri })) 
     };
+  } catch (error) {
+    return { text: "Search Error: Check Vercel API keys.", sources: [] };
   }
 };
 
-export const generateSpeech = async (text: string, voiceGender: VoiceGender): Promise<Uint8Array | null> => {
-  const hf = new HfInference(process.env.VITE_HUGGINGFACE_API_KEY || process.env.HUGGINGFACE_API_KEY);
-  
+// --- RESEARCH HELPERS ---
+async function fetchSerper(q: string, key: string) {
+  if (!key) return [];
   try {
-    const cleanText = text
-      .replace(/[#*_`~>]/g, '')
-      .replace(/\[.*?\]\(.*?\)/g, '')
-      .replace(/https?:\/\/\S+/g, '')
-      .trim()
-      .slice(0, 4000);
-    
-    const response = await hf.textToSpeech({
-      model: TTS_MODEL,
-      inputs: cleanText,
+    const res = await fetch("https://google.serper.dev", {
+      method: "POST",
+      headers: { "X-API-KEY": key, "Content-Type": "application/json" },
+      body: JSON.stringify({ q })
     });
+    const d = await res.json();
+    return d.organic?.map((r: any) => ({ title: r.title, uri: r.link, snippet: r.snippet })) || [];
+  } catch { return []; }
+}
 
-    const arrayBuffer = await response.arrayBuffer();
-    return new Uint8Array(arrayBuffer);
+async function fetchTavily(q: string, key: string) {
+  if (!key) return [];
+  try {
+    const res = await fetch("https://api.tavily.com", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: key, query: q, search_depth: "basic" })
+    });
+    const d = await res.json();
+    return d.results?.map((r: any) => ({ title: r.title, uri: r.url, snippet: r.content })) || [];
+  } catch { return []; }
+}
 
-  } catch (error) { 
-    console.error("Hugging Face TTS failure:", error);
-    return null; 
-  }
+/**
+ * 2. SPEECH GENERATOR (Native Browser API - No Hugging Face)
+ */
+export const speakResponse = (text: string, voiceGender: VoiceGender) => {
+  if (!('speechSynthesis' in window)) return;
+
+  // Clean text from markdown/links
+  const cleanText = text.replace(/[#*_`~>]/g, '').replace(/\[.*?\]\(.*?\)/g, '').trim();
+  const utterance = new SpeechSynthesisUtterance(cleanText);
+  
+  // Find a suitable voice
+  const voices = window.speechSynthesis.getVoices();
+  const preferredVoice = voices.find(v => 
+    v.lang.includes('en') && 
+    (voiceGender === 'MALE' ? v.name.includes('Male') : v.name.includes('Female'))
+  );
+
+  if (preferredVoice) utterance.voice = preferredVoice;
+  utterance.rate = 1.0;
+  
+  window.speechSynthesis.speak(utterance);
 };
-
-export function decode(base64: string): Uint8Array {
-  const binaryString = atob(base64.replace(/\s/g, ''));
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes;
-}
-
-export async function decodeAudioData(
-  data: Uint8Array,
-  ctx: AudioContext,
-  sampleRate: number = 24000,
-  numChannels: number = 1
-): Promise<AudioBuffer> {
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  const frameCount = data.byteLength / 2 / numChannels;
-  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
-
-  for (let channel = 0; channel < numChannels; channel++) {
-    const channelData = buffer.getChannelData(channel);
-    for (let i = 0; i < frameCount; i++) {
-      const byteOffset = (i * numChannels + channel) * 2;
-      if (byteOffset + 1 < data.byteLength) {
-        const sample = view.getInt16(byteOffset, true);
-        channelData[i] = sample / 32768.0;
-      }
-    }
-  }
-  return buffer;
-}
